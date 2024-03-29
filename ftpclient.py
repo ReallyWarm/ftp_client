@@ -76,7 +76,7 @@ class FTPClient():
         peek = self.peek_resp(self.ftp_socket, 5)
         if peek == b'':
             close = True
-        elif peek.startswith((b'421', b'426', b'550')):
+        elif peek.startswith((b'421', b'425', b'426', b'550')):
             self.receive_all(self.ftp_socket, 4096)
             close = True
         
@@ -89,7 +89,7 @@ class FTPClient():
 
     def is_command_success(self):
         resp = self.receive_all(self.ftp_socket, 4096)
-        if resp.startswith(b'5'):
+        if resp.startswith((b'4', b'5')):
             return False
         return True
     
@@ -142,7 +142,6 @@ class FTPClient():
             return
 
     def disconnect(self, *_):
-        # Disconnect from the remote host, retaining the ftp prompt.
         if not self.is_connected():
             print("Not connected.")
             return
@@ -153,11 +152,9 @@ class FTPClient():
         self.clear_variable()
 
     def close(self, *_):
-        # End the FTP session and return to the cmd prompt.
         self.disconnect()
 
     def quit(self, *_):
-        # End the FTP session with the remote host and exit ftp.
         if self.is_connected():   
             self.ftp_socket.send(f'QUIT\r\n'.encode())
             self.receive_all(self.ftp_socket, 4096)
@@ -168,22 +165,25 @@ class FTPClient():
         self.running = False
 
     def bye(self, *_):
-        # End the FTP session and exit ftp
         self.quit()
 
-    def ascii(self, *args):
-        # Set the file transfer type to ASCII, the default. 
-        # In ASCII text mode, character-set and end-of-line
-        # characters are converted as necessary.
+    def ascii(self, *_):
+        if not self.is_connected():
+            print("Not connected.")
+            return
+        
+        self.ftp_socket.send(f"TYPE A\r\n".encode())
         self.receive_all(self.ftp_socket, 4096)
 
-    def binary(self, *args):
-        # Set the file transfer type to binary. 
-        # Use `Binary' for transferring executable program
-        # files or binary data files e.g. Oracle
-        pass
+    def binary(self, *_):
+        if not self.is_connected():
+            print("Not connected.")
+            return
+        
+        self.ftp_socket.send(f"TYPE I\r\n".encode())
+        self.receive_all(self.ftp_socket, 4096)
 
-    def cd(self, rdir=None, *args):
+    def cd(self, rdir=None, *_):
         if not self.is_connected():
             print("Not connected.")
             return
