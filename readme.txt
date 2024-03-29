@@ -20,4 +20,6 @@ Socket Programming: FTP Client
 
 เริ่มต้นการทำงานด้วยการสร้าง class FTPClient และเรียกใช้ method ชื่อ start
 
-* หมายเหตุ: มีการใช้ inspect (build-in libary) เพื่อใช้ตรวจสอบว่าเป็น method ของ FTPClient ที่นำไปใช้งานได้เท่านั้น
+* หมายเหตุ: 
+  มีการใช้ inspect (build-in libary) เพื่อใช้ตรวจสอบว่า user input เป็น method ของ FTPClient ที่นำไปใช้งานได้
+  มีการใช้ time (build-in libary) เพื่อใช้คำนวนหาค่า transfer rate
