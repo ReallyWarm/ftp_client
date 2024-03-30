@@ -12,9 +12,11 @@ class FTPClient():
 
     def start(self):
         self.running = True
-        invalid_commands = (FTPClient.start, FTPClient.clear_variable, FTPClient.get_data_socket, 
-                            FTPClient.is_connected, FTPClient.is_command_success, FTPClient.is_login_success, 
-                            FTPClient.receive_all, FTPClient.peek_resp, FTPClient.attempt_connect)
+        invalid_commands = (FTPClient.start, FTPClient.clear_variable, FTPClient.receive_all, 
+                            FTPClient.peek_resp, FTPClient.get_open_port, FTPClient.get_data_socket, 
+                            FTPClient.attempt_connect, FTPClient.is_connected, FTPClient.is_command_success, 
+                            FTPClient.is_login_success)
+        
         while self.running:
             args = input("ftp> ").strip().split()
             if len(args) > 0:
@@ -35,29 +37,6 @@ class FTPClient():
         self.server_port = None
         self.my_addr = None
         self.my_port = None
-
-    def get_open_port(self):
-        tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tmp_sock.bind(('', 0))
-        port = tmp_sock.getsockname()[1]
-        tmp_sock.close()
-        return port
-
-    def get_data_socket(self):
-        port = self.get_open_port()
-        addr_data = f"{self.my_addr}.{port//256}.{port%256}".replace('.',',')
-        self.ftp_socket.send(f"PORT {addr_data}\r\n".encode())
-        resp = self.receive_all(self.ftp_socket, 1024)
-        if not resp.startswith(b'200'):
-            return None
-        
-        data_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            data_socket.bind((self.my_addr, port))
-            return data_socket
-        except socket.error as msg:
-            print(f"Failed to connect: {msg}")
-            return None
     
     def receive_all(self, sock, buff_size=4096, is_data=False, show=True):
         all_data = b''
@@ -91,6 +70,29 @@ class FTPClient():
             return b''
         finally:
             sock.setblocking(True)
+
+    def get_open_port(self):
+        tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tmp_sock.bind(('', 0))
+        port = tmp_sock.getsockname()[1]
+        tmp_sock.close()
+        return port
+
+    def get_data_socket(self):
+        port = self.get_open_port()
+        addr_data = f"{self.my_addr}.{port//256}.{port%256}".replace('.',',')
+        self.ftp_socket.send(f"PORT {addr_data}\r\n".encode())
+        resp = self.receive_all(self.ftp_socket, 1024)
+        if not resp.startswith(b'200'):
+            return None
+        
+        data_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            data_socket.bind((self.my_addr, port))
+            return data_socket
+        except socket.error as msg:
+            print(f"Failed to connect: {msg}")
+            return None
 
     def attempt_connect(self, sock, host, port):
         try:
