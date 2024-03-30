@@ -12,18 +12,17 @@ class FTPClient():
                             FTPClient.is_connected, FTPClient.is_command_success, FTPClient.is_login_success, 
                             FTPClient.receive_all, FTPClient.peek_resp)
         while self.running:
-            args = input("ftp> ").strip().split(" ")
-            command = getattr(FTPClient, args[0].lower(), None)
+            args = input("ftp> ").strip().split()
+            if len(args) > 0:
+                command = getattr(FTPClient, args[0].lower(), None)
 
-            not_command = not inspect.isfunction(command)
-            is_invalid = command in invalid_commands
-            
-            if args[0] == '':
-                pass
-            elif not_command or is_invalid:
-                print("Invalid command.")
-            else:
-                command(self, *args[1:])
+                not_command = not inspect.isfunction(command)
+                is_invalid = command in invalid_commands
+                
+                if not_command or is_invalid:
+                    print("Invalid command.")
+                else:
+                    command(self, *args[1:])
 
     def clear_variable(self):
         self.ftp_socket = None
@@ -31,7 +30,10 @@ class FTPClient():
 
     def get_host_from_pasv(self):
         self.ftp_socket.send("PASV\r\n".encode())
-        resp = self.ftp_socket.recv(1024)
+        resp = self.receive_all(self.ftp_socket, 1024)
+        if not resp.startswith(b'2'):
+            return None, None
+        
         data = resp.decode().replace(')',',').replace('(',',').split(',')
         host = ".".join(data[1:5])
         port = int(data[5])*256+int(data[6])
@@ -44,11 +46,15 @@ class FTPClient():
             resp = data.decode()
             print(resp, end='')
             all_data += data
+
             if data == b'':
                 break
             elif len(data) < buff_size:
-                if len(data) >= 6:
-                    if resp[0:3].isnumeric() and resp[3] == ' ':
+                data_list = [d for d in data.split(b'\r\n') if d != b'']
+
+                if len(data_list[-1]) >= 4:
+                    last_resp = data_list[-1].decode()
+                    if last_resp[0:3].isnumeric() and last_resp[3] == ' ':
                         break
                 else:
                     break
@@ -131,12 +137,12 @@ class FTPClient():
         self.ftp_socket.send("OPTS UTF8 ON\r\n".encode())
         self.receive_all(self.ftp_socket, 4096)
 
-        username = input(f"User ({host}:(none)): ")
+        username = input(f"User ({host}:(none)): ").strip()
         self.ftp_socket.send(f"USER {username}\r\n".encode())
         if not self.is_login_success():
             return
 
-        password = input("Password: ")
+        password = input("Password: ").strip()
         self.ftp_socket.send(f"PASS {password}\r\n".encode())
         if not self.is_login_success():
             return
@@ -190,12 +196,28 @@ class FTPClient():
         
         if rdir is None:
             rdir = input(f"Remote directory ")
+        if rdir == '':
+            print("cd remote directory.")
+            return
         
+        rdir = rdir.split()[0]
         self.ftp_socket.send(f"CWD {rdir}\r\n".encode())
         self.receive_all(self.ftp_socket, 4096)
 
-    def delete(self, *args):
-        pass
+    def delete(self, rfile=None, *_):
+        if not self.is_connected():
+            print("Not connected.")
+            return
+        
+        if rfile is None:
+            rfile = input(f"Remote file ")
+        if rfile == '':
+            print("delete remote file.")
+            return
+        
+        rfile = rfile.split()[0]
+        self.ftp_socket.send(f"DELE {rfile}\r\n".encode())
+        self.receive_all(self.ftp_socket, 4096)
 
     def get(self, *args):
         pass
@@ -206,6 +228,9 @@ class FTPClient():
             return
         
         host, port = self.get_host_from_pasv()
+        if host is None:
+            return
+        
         self.ftp_socket.send(f"NLST {rdir}\r\n".encode())
         list_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         list_socket.connect((host, port))
@@ -234,5 +259,25 @@ class FTPClient():
     def rename(self, *args):
         pass
 
-    def user(self, *args):
-        pass
+    def user(self, user=None, password=None, *_):
+        if not self.is_connected():
+            print("Not connected.")
+            return
+
+        if user is None:
+            user = input(f"Username ").strip()
+        if user == '':
+            print("Usage: user username [password] [account]")
+            return
+        user_info = user.split()
+        self.ftp_socket.send(f"USER {user_info[0]}\r\n".encode())
+        if not self.is_login_success():
+            return
+        
+        if len(user_info) >= 2:
+            password = user_info[1]
+        if password is None:
+            password = input("Password: ").strip()
+        self.ftp_socket.send(f"PASS {password}\r\n".encode())
+        if not self.is_login_success():
+            return
