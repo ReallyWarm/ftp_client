@@ -255,14 +255,25 @@ class FTPClient():
         if not self.is_connected():
             return
         
+        if lfile is None:
+            lfile = rfile
+
         if rfile is None:
-            rfile = input("Remote file ")
-            if rfile == '':
-                print("Remote file get [ local-file ].")
-                return
-            lfile = input("Local file ")
-        rfile = rfile.split()[0]
-        lfile = rfile.split('/')[-1] if (lfile == None or lfile == '') else lfile.split()[0]
+            rfile = input("Local file ")
+        if rfile == '':
+            print("Local file put: remote file.")
+            return
+        tmp_info = rfile.split()
+        rfile = tmp_info[0]
+
+        if len(tmp_info) > 1:
+            lfile = tmp_info[1]
+        if lfile == None:
+            lfile = input("Remote file ")
+            if lfile == '':
+                lfile = rfile.split('/')[-1]
+            else:
+                lfile = lfile.split()[0]
 
         with self.get_data_socket() as data_socket:
             if data_socket is None:
@@ -278,6 +289,9 @@ class FTPClient():
                 file = open(lfile, 'wb')
             except FileNotFoundError:
                 print("> R:No such process")
+            except PermissionError:
+                print(f"Error opening local file {lfile}.")
+                return
             except Exception as msg:
                 print(msg)
                 return
@@ -324,14 +338,106 @@ class FTPClient():
         if tf_rate > resp_size: tf_rate = resp_size
         print(f"ftp: {resp_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
 
-    def put(self, *args):
-        pass
+    def put(self, lfile=None, rfile=None, *_):
+        if not self.is_connected():
+            return
+        
+        if rfile is None:
+            rfile = lfile
 
-    def pwd(self, *args):
-        print()
+        if lfile is None:
+            lfile = input("Local file ")
+            if lfile == '':
+                print("Local file put: remote file.")
+                return
+        tmp_info = lfile.split()
+        lfile = tmp_info[0]
 
-    def rename(self, *args):
-        pass
+        if len(tmp_info) > 1:
+            rfile = tmp_info[1]
+        if rfile is None:
+            rfile = input("Remote file ")
+            if rfile == '':
+                rfile = lfile.split('/')[-1]
+            else:
+                rfile = rfile.split()[0]
+
+        try:
+            file = open(lfile, 'rb')
+        except FileNotFoundError:
+            print(f"{lfile}: File not found")
+            return
+        except PermissionError:
+            print(f"Error opening local file {lfile}.")
+            return
+        except Exception as msg:
+            print(msg)
+            return
+        
+        with self.get_data_socket() as data_socket:
+            if data_socket is None:
+                return
+            data_socket.listen()
+
+            self.ftp_socket.send(f"STOR {rfile}\r\n".encode())
+            if not self.is_command_success():
+                return
+            
+            data_size = 0
+            start_t = time.time()
+            connection, _ = data_socket.accept()
+            
+            while True:
+                buffer = file.read(4096)
+                if buffer == b'':
+                    break
+                connection.send(buffer)
+                data_size += len(buffer)
+            connection.close()
+
+        self.receive_all(self.ftp_socket, 4096)
+
+        elapsed = time.time() - start_t
+        if elapsed == 0: elapsed = 0.000000001
+        tf_rate = (data_size/1000)/elapsed
+        if tf_rate > data_size: tf_rate = data_size
+        print(f"ftp: {data_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
+
+    def pwd(self):
+        if not self.is_connected():
+            return
+        
+        self.ftp_socket.send(f"PWD\r\n".encode())
+        if not self.is_command_success():
+            return
+
+    def rename(self, fromname=None, toname=None, *_):
+        if not self.is_connected():
+            return
+        
+        if fromname is None:
+            fromname = input("From name ")
+        if fromname == '':
+            print("rename from-name to-name.")
+            return
+        
+        rename_info = fromname.split()
+        if len(rename_info) >= 2:
+            toname = rename_info[1]
+        if toname is None:
+            toname = input("To name ")
+        if toname == '':
+            print("rename from-name to-name.")
+            return
+        
+        fromname = rename_info[0]
+        self.ftp_socket.send(f"RNFR {fromname}\r\n".encode())
+        if not self.is_command_success():
+            return
+        
+        self.ftp_socket.send(f"RNTO {toname}\r\n".encode())
+        if not self.is_command_success():
+            return
 
     def user(self, user=None, password=None, *_):
         if not self.is_connected():
