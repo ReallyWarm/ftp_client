@@ -55,8 +55,7 @@ class FTPClient():
                         break
         
         if show:
-            all_data = all_data.replace(b'\r\n\r\n', b'\r\n')
-            print(all_data.decode(), end='')
+            print(all_data.replace(b'\r\n\r\n', b'\r\n').decode(), end='')
         return all_data
     
     def peek_resp(self, sock, buff_size=4096):
@@ -295,22 +294,28 @@ class FTPClient():
             except Exception as msg:
                 print(msg)
                 return
-            
+
+            data_size = 0
             start_t = time.time()
             connection, _ = data_socket.accept()
-            resp = self.receive_all(connection, 4096, is_data=True, show=False)
+            
+            while True:
+                data = connection.recv(4096)
+                if data == b'' or data == '':
+                    break
+                if file is not None:
+                    file.write(data)
+                data_size += len(data)
+            connection.close()
 
         self.receive_all(self.ftp_socket, 4096)
-        if file is not None:
-            file.write(resp)
-            file.close()
+        file.close()
 
         elapsed = time.time() - start_t
         if elapsed == 0: elapsed = 0.000000001
-        resp_size = len(resp)
-        tf_rate = (resp_size/1000)/elapsed
-        if tf_rate > resp_size: tf_rate = resp_size
-        print(f"ftp: {resp_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
+        tf_rate = (data_size/1000)/elapsed
+        if tf_rate > data_size: tf_rate = data_size
+        print(f"ftp: {data_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
 
     def ls(self, rdir='', *_):
         if not self.is_connected():
@@ -396,7 +401,6 @@ class FTPClient():
             connection.close()
 
         self.receive_all(self.ftp_socket, 4096)
-
         elapsed = time.time() - start_t
         if elapsed == 0: elapsed = 0.000000001
         tf_rate = (data_size/1000)/elapsed
