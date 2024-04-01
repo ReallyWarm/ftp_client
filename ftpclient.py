@@ -1,6 +1,9 @@
 import socket, inspect, time
 
 class FTPClient():
+    TYPE_I = 'BINARY'
+    TYPE_A = "ASCII"
+
     def __init__(self):
         self.ftp_socket = None
         self.server_name = None
@@ -8,14 +11,15 @@ class FTPClient():
         self.server_port = None
         self.my_addr = None
         self.my_port = None
+        self.tf_mode = self.TYPE_I
         self.running = False
 
     def start(self):
         self.running = True
-        invalid_commands = (FTPClient.start, FTPClient.clear_variable, FTPClient.receive_all, 
+        invalid_commands = (FTPClient.start, FTPClient.clear_variable, FTPClient.receive_resp, 
                             FTPClient.peek_resp, FTPClient.get_open_port, FTPClient.get_data_socket, 
-                            FTPClient.attempt_connect, FTPClient.is_connected, FTPClient.is_command_success, 
-                            FTPClient.is_login_success)
+                            FTPClient.attempt_connect, FTPClient.is_connected, FTPClient.send_command,
+                            FTPClient.is_command_success, FTPClient.show_transfer_rate)
         
         while self.running:
             args = input("ftp> ").strip().split()
@@ -37,25 +41,29 @@ class FTPClient():
         self.server_port = None
         self.my_addr = None
         self.my_port = None
-    
-    def receive_all(self, sock, buff_size=4096, is_data=False, show=True):
+        self.tf_mode = self.TYPE_I
+
+    def receive_resp(self, sock, buff_size=4096, show=True):
         all_data = b''
+
         while True:
             data = sock.recv(buff_size)
             all_data += data
 
             if data == b'':
                 break
-            elif len(data) < buff_size:
-                new_resp_list = [d for d in data.split(b'\r\n') if d != b'']
 
-                if len(new_resp_list[-1]) >= 4 and not is_data:
-                    last_resp = new_resp_list[-1].decode()
-                    if last_resp[0:3].isnumeric() and last_resp[3] == ' ':
-                        break
+            if all_data[3:4] == b'-':
+                code = all_data[:3]
+            else:
+                break
+
+            last_resp = [d for d in data.replace(b'\r', b'\n').split(b'\n') if d != b''][-1]
+            if last_resp[:3] == code and last_resp[3:4] != b'-':
+                break
         
         if show:
-            print(all_data.replace(b'\r\n\r\n', b'\r\n').decode(), end='')
+            print('\n'.join(d for d in all_data.decode().replace('\r', '\n').split('\n') if d != ''))
         return all_data
     
     def peek_resp(self, sock, buff_size=4096):
@@ -64,8 +72,10 @@ class FTPClient():
             resp = sock.recv(buff_size, socket.MSG_PEEK)
             return resp
         except BlockingIOError:
-            return b'BlockingIOError'
-        except (ConnectionResetError, ConnectionError, ConnectionAbortedError):
+            return b'ALIVE'
+        except ConnectionAbortedError:
+            return b'426'
+        except (ConnectionResetError, ConnectionError, socket.error):
             return b''
         finally:
             sock.setblocking(True)
@@ -80,8 +90,8 @@ class FTPClient():
     def get_data_socket(self):
         port = self.get_open_port()
         addr_data = f"{self.my_addr}.{port//256}.{port%256}".replace('.',',')
-        self.ftp_socket.send(f"PORT {addr_data}\r\n".encode())
-        resp = self.receive_all(self.ftp_socket, 1024)
+        self.send_command(f"PORT {addr_data}")
+        resp = self.receive_resp(self.ftp_socket, 1024)
         if not resp.startswith(b'200'):
             return None
         
@@ -115,34 +125,35 @@ class FTPClient():
         close = False
         peek = self.peek_resp(self.ftp_socket, 5)
         if peek == b'':
-            if show_status: print("Not connected.")
             close = True
         elif peek.startswith((b'421', b'425', b'426', b'550')):
-            self.receive_all(self.ftp_socket, 4096)
-            if show_status: print("Connection closed by remote host.")
+            self.receive_resp(self.ftp_socket, 4096)
             close = True
         
         if close:
+            if show_status: print("Connection closed by remote host.")
             self.ftp_socket.close() 
             self.clear_variable()
             return False
         
         return True
+    
+    def send_command(self, command):
+        if self.is_connected():
+            self.ftp_socket.send((command + "\r\n").encode())
 
     def is_command_success(self):
-        resp = self.receive_all(self.ftp_socket, 4096)
+        resp = self.receive_resp(self.ftp_socket, 4096)
         if resp.startswith((b'4', b'5')):
             return False
         return True
     
-    def is_login_success(self):
-        if not self.is_connected():
-            return False
-        
-        if not self.is_command_success():
-            print("Login failed.")
-            return False
-        return True
+    def show_transfer_rate(self, start_time, end_time, size):
+        elapsed = end_time - start_time
+        if elapsed == 0: elapsed = 0.000000001
+        tf_rate = (size/1000)/elapsed
+        if tf_rate > size: tf_rate = size
+        print(f"ftp: {size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
 
     def open(self, host=None, port=21, *_):
         if self.server_name:
@@ -170,26 +181,28 @@ class FTPClient():
                 self.server_name = host
 
         print(f"Connected to {self.server_name}.")
-        self.receive_all(self.ftp_socket, 4096)
-        self.ftp_socket.send("OPTS UTF8 ON\r\n".encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.receive_resp(self.ftp_socket, 4096)
+        self.send_command("OPTS UTF8 ON")
+        self.receive_resp(self.ftp_socket, 4096)
 
         username = input(f"User ({self.server_name}:(none)): ").strip()
-        self.ftp_socket.send(f"USER {username}\r\n".encode())
-        if not self.is_login_success():
+        self.send_command(f"USER {username}")
+        if not self.is_command_success():
+            print("Login failed.")
             return
 
         password = input("Password: ").strip()
-        self.ftp_socket.send(f"PASS {password}\r\n".encode())
-        if not self.is_login_success():
+        self.send_command(f"PASS {password}")
+        if not self.is_command_success():
+            print("Login failed.")
             return
 
     def disconnect(self, *_):
         if not self.is_connected(show_status=False):
             return
         
-        self.ftp_socket.send(f'QUIT\r\n'.encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.send_command(f"QUIT")
+        self.receive_resp(self.ftp_socket, 4096)
         self.ftp_socket.close()       
         self.clear_variable()
 
@@ -198,8 +211,8 @@ class FTPClient():
 
     def quit(self, *_):
         if self.is_connected(show_status=False):   
-            self.ftp_socket.send(f'QUIT\r\n'.encode())
-            self.receive_all(self.ftp_socket, 4096)
+            self.send_command(f"QUIT")
+            self.receive_resp(self.ftp_socket, 4096)
             self.ftp_socket.close()
             self.clear_variable
         
@@ -212,15 +225,17 @@ class FTPClient():
         if not self.is_connected():
             return
         
-        self.ftp_socket.send(f"TYPE A\r\n".encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.send_command(f"TYPE A")
+        self.receive_resp(self.ftp_socket, 4096)
+        self.tf_mode = self.TYPE_A
 
     def binary(self, *_):
         if not self.is_connected():
             return
         
-        self.ftp_socket.send(f"TYPE I\r\n".encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.send_command(f"TYPE I")
+        self.receive_resp(self.ftp_socket, 4096)
+        self.tf_mode = self.TYPE_I
 
     def cd(self, rdir=None, *_):
         if not self.is_connected():
@@ -233,8 +248,8 @@ class FTPClient():
             return
         
         rdir = rdir.split()[0]
-        self.ftp_socket.send(f"CWD {rdir}\r\n".encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.send_command(f"CWD {rdir}")
+        self.receive_resp(self.ftp_socket, 4096)
 
     def delete(self, rfile=None, *_):
         if not self.is_connected():
@@ -247,8 +262,8 @@ class FTPClient():
             return
         
         rfile = rfile.split()[0]
-        self.ftp_socket.send(f"DELE {rfile}\r\n".encode())
-        self.receive_all(self.ftp_socket, 4096)
+        self.send_command(f"DELE {rfile}")
+        self.receive_resp(self.ftp_socket, 4096)
 
     def get(self, rfile=None, lfile=None, *_):
         if not self.is_connected():
@@ -279,13 +294,16 @@ class FTPClient():
                 return
             data_socket.listen()
 
-            self.ftp_socket.send(f"RETR {rfile}\r\n".encode())
+            self.send_command(f"RETR {rfile}")
             if not self.is_command_success():
                 return
             
             file = None
             try:
-                file = open(lfile, 'wb')
+                if self.tf_mode == self.TYPE_A:
+                    file = open(lfile, 'w', encoding='ascii', errors='replace')
+                else:
+                    file = open(lfile, 'wb')
             except FileNotFoundError:
                 print("> R:No such process")
             except PermissionError:
@@ -301,21 +319,19 @@ class FTPClient():
             
             while True:
                 data = connection.recv(4096)
-                if data == b'' or data == '':
+                if data == b'':
                     break
                 if file is not None:
+                    if self.tf_mode == self.TYPE_A:
+                        data = data.decode('ascii', 'replace')
                     file.write(data)
                 data_size += len(data)
             connection.close()
 
-        self.receive_all(self.ftp_socket, 4096)
+        self.receive_resp(self.ftp_socket, 4096)
         file.close()
-
-        elapsed = time.time() - start_t
-        if elapsed == 0: elapsed = 0.000000001
-        tf_rate = (data_size/1000)/elapsed
-        if tf_rate > data_size: tf_rate = data_size
-        print(f"ftp: {data_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
+        end_t = time.time()
+        self.show_transfer_rate(start_t, end_t, data_size)
 
     def ls(self, rdir='', *_):
         if not self.is_connected():
@@ -326,22 +342,26 @@ class FTPClient():
                 return
             data_socket.listen()
         
-            self.ftp_socket.send(f"NLST {rdir}\r\n".encode())
+            self.send_command(f"NLST {rdir}")
             if not self.is_command_success():
                 return
             
+            data_size = 0
             start_t = time.time()
             connection, _ = data_socket.accept()
-            resp = self.receive_all(connection, 4096, is_data=True)
+
+            while True:
+                data = connection.recv(4096)
+                if data == b'':
+                    break
+                print(data.decode(), end='')
+                data_size += len(data)
+
             connection.close()
 
-        self.receive_all(self.ftp_socket, 4096)
-        elapsed = time.time() - start_t
-        if elapsed == 0: elapsed = 0.000000001
-        resp_size = len(resp) + 3
-        tf_rate = (resp_size/1000)/elapsed
-        if tf_rate > resp_size: tf_rate = resp_size
-        print(f"ftp: {resp_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
+        self.receive_resp(self.ftp_socket, 4096)
+        end_t = time.time()
+        self.show_transfer_rate(start_t, end_t, data_size + 3)
 
     def put(self, lfile=None, rfile=None, *_):
         if not self.is_connected():
@@ -384,7 +404,7 @@ class FTPClient():
                 return
             data_socket.listen()
 
-            self.ftp_socket.send(f"STOR {rfile}\r\n".encode())
+            self.send_command(f"STOR {rfile}")
             if not self.is_command_success():
                 return
             
@@ -393,25 +413,28 @@ class FTPClient():
             connection, _ = data_socket.accept()
             
             while True:
-                buffer = file.read(4096)
+                buffer = file.readline(4096)
                 if buffer == b'':
                     break
+                if self.tf_mode == self.TYPE_A:
+                    if buffer[-2:] != b'\r\n':
+                        if buffer[-1] in b'\r\n': 
+                            buffer = buffer[:-1]
+                        buffer = buffer + b'\r\n'
                 connection.send(buffer)
                 data_size += len(buffer)
             connection.close()
 
-        self.receive_all(self.ftp_socket, 4096)
-        elapsed = time.time() - start_t
-        if elapsed == 0: elapsed = 0.000000001
-        tf_rate = (data_size/1000)/elapsed
-        if tf_rate > data_size: tf_rate = data_size
-        print(f"ftp: {data_size} bytes received in {elapsed:.2f}Seconds {tf_rate:.2f}Kbytes/sec.")
+        self.receive_resp(self.ftp_socket, 4096)
+        file.close()
+        end_t = time.time()
+        self.show_transfer_rate(start_t, end_t, data_size)
 
     def pwd(self):
         if not self.is_connected():
             return
         
-        self.ftp_socket.send(f"PWD\r\n".encode())
+        self.send_command(f"PWD")
         if not self.is_command_success():
             return
 
@@ -435,11 +458,11 @@ class FTPClient():
             return
         
         fromname = rename_info[0]
-        self.ftp_socket.send(f"RNFR {fromname}\r\n".encode())
+        self.send_command(f"RNFR {fromname}")
         if not self.is_command_success():
             return
         
-        self.ftp_socket.send(f"RNTO {toname}\r\n".encode())
+        self.send_command(f"RNTO {toname}")
         if not self.is_command_success():
             return
 
@@ -453,14 +476,16 @@ class FTPClient():
             print("Usage: user username [password] [account]")
             return
         user_info = user.split()
-        self.ftp_socket.send(f"USER {user_info[0]}\r\n".encode())
-        if not self.is_login_success():
+        self.send_command(f"USER {user_info[0]}")
+        if not self.is_command_success():
+            print("Login failed.")
             return
         
         if len(user_info) >= 2:
             password = user_info[1]
         if password is None:
             password = input("Password: ").strip()
-        self.ftp_socket.send(f"PASS {password}\r\n".encode())
-        if not self.is_login_success():
+        self.send_command(f"PASS {password}")
+        if not self.is_command_success():
+            print("Login failed.")
             return
