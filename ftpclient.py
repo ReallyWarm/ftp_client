@@ -162,6 +162,14 @@ class FTPClient():
 
         if host is None:
             host = input("To ")
+            if host == '':
+                print("Usage: open host name [port]")
+                return
+            else:
+                tmp = host.split()
+                host = tmp[0]
+                if len(tmp) > 1:
+                    port = tmp[1]
         port = int(port)
         self.ftp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connected = self.attempt_connect(self.ftp_socket, host, port)
@@ -198,7 +206,7 @@ class FTPClient():
             return
 
     def disconnect(self, *_):
-        if not self.is_connected(show_status=False):
+        if not self.is_connected():
             return
         
         self.send_command(f"QUIT")
@@ -269,8 +277,8 @@ class FTPClient():
         if not self.is_connected():
             return
         
-        if lfile is None:
-            lfile = rfile
+        if rfile is not None and lfile is None:
+            lfile = rfile.split('/')[-1]
 
         if rfile is None:
             rfile = input("Local file ")
@@ -293,15 +301,11 @@ class FTPClient():
             if data_socket is None:
                 return
             data_socket.listen()
-
-            self.send_command(f"RETR {rfile}")
-            if not self.is_command_success():
-                return
             
             file = None
             try:
                 if self.tf_mode == self.TYPE_A:
-                    file = open(lfile, 'w', encoding='ascii', errors='replace')
+                    file = open(lfile, 'w', encoding='utf-8', errors='replace')
                 else:
                     file = open(lfile, 'wb')
             except FileNotFoundError:
@@ -311,6 +315,10 @@ class FTPClient():
                 return
             except Exception as msg:
                 print(msg)
+                return
+            
+            self.send_command(f"RETR {rfile}")
+            if not self.is_command_success():
                 return
 
             data_size = 0
@@ -323,13 +331,14 @@ class FTPClient():
                     break
                 if file is not None:
                     if self.tf_mode == self.TYPE_A:
-                        data = data.decode('ascii', 'replace')
+                        data = data.decode('utf-8', 'replace')
+                        data = data.replace('\r\n', '\n').replace('\r', '\n')
                     file.write(data)
                 data_size += len(data)
             connection.close()
 
         self.receive_resp(self.ftp_socket, 4096)
-        file.close()
+        if file is not None: file.close()
         end_t = time.time()
         self.show_transfer_rate(start_t, end_t, data_size)
 
@@ -367,8 +376,8 @@ class FTPClient():
         if not self.is_connected():
             return
         
-        if rfile is None:
-            rfile = lfile
+        if lfile is not None and rfile is None:
+            rfile = lfile.split('/')[-1]
 
         if lfile is None:
             lfile = input("Local file ")
@@ -430,7 +439,7 @@ class FTPClient():
         end_t = time.time()
         self.show_transfer_rate(start_t, end_t, data_size)
 
-    def pwd(self):
+    def pwd(self, *_):
         if not self.is_connected():
             return
         
